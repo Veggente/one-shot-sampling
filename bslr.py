@@ -211,6 +211,7 @@ def plot_plos_one_fig_7(num_sims=1000):
     gamma_list = np.concatenate((np.ones(10)*0.8, np.zeros(10)))
     alpha = 0.95
     figsize = (7, 4)
+    ylim = [-0.05, 1.05]
     one_shot_labels = ['one-shot', 'multi-shot']
     for idx, one_shot in enumerate([True, False]):
         rpf_dict[one_shot_labels[idx]] = []
@@ -245,17 +246,17 @@ def plot_plos_one_fig_7(num_sims=1000):
              save_file=(
                  'hetero-gamma-fnr-n{}'
                  '.pdf'.format(num_sims)
-                 ), figsize=figsize)
+                 ), figsize=figsize, ylim=ylim)
     bar_plot(num_sims, 1-prec_df, 'FDR', 'outside',
              save_file=(
                  'hetero-gamma-fdr-n{}'
                  '.pdf'.format(num_sims)
-                 ), figsize=figsize)
+                 ), figsize=figsize, ylim=ylim)
     bar_plot(num_sims, 1-spec_df, 'FPR', 'outside',
              save_file=(
                  'hetero-gamma-fpr-n{}'
                  '.pdf'.format(num_sims)
-                 ), figsize=figsize)
+                 ), figsize=figsize, ylim=ylim)
     return
 
 
