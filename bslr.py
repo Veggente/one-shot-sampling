@@ -12,6 +12,14 @@ Functions:
     plot_hetero_gamma: Bar plot of loss functions for heterogeneous
         gamma case.
     plot_plos_one_fig_5_6: Plot PLOS ONE Figs 5 and 6.
+    eval_bslr_on_locke: Evaluate BSLR using Locke model.
+    close: Unparameterize function.
+    locke_drift: Drift coefficient of Locke model.
+    locke_drift_lite: Drift for one variable.
+    hill: Hill function.
+    diff_coeff: Diffusion coefficient.
+    get_locke_params: Get parameters in Locke paper.
+    eval_bslr_multi_sims: Evaluate BSLR with multiple simulations.
 """
 from tqdm import tqdm
 import numpy as np
@@ -30,6 +38,8 @@ else:
     print("No support for Windows.")
     exit(1)
 import pickle
+import sdeint
+import json
 
 # CausNet commit 425e3a9.
 import causnet
@@ -605,4 +615,550 @@ def plot_plos_one_fig_5_6(
                          one_shot, noise
                          ), x_axis_name=r'$\gamma$',
                      figsize=figsize, ylim=ylim)
+    return
+
+
+def eval_bslr_on_locke(
+        sampling_times, num_cond, num_rep, one_shot, sigma_co,
+        sigma_bi, write_file, rand_seed=0, sig_level=0.05,
+        output='', num_integration_interval=100, max_in_deg=3
+        ):
+    """Evaluate BSLR using network in Locke et al. MSB 2005.
+
+    One environmental condition is modeled by the same set of
+    initial conditions (values) of the gene expression levels,
+    as well as the same condition-dependent nominal production
+    variations.
+
+    Args:
+        sampling_times: array
+            Sampling times as evenly spaced nonnegative
+            numbers in an increasing order.
+        num_cond: int
+            Number of conditions.
+        num_rep: int
+            Number of replicates per single time.
+        one_shot: bool
+            True if one-shot, False if multi-shot.
+        sigma_co: float
+            Condition-dependent production variation level.
+        sigma_bi: float
+            Biological production variation level.
+        write_file: bool
+            Writes xml file if True.  Returns the adjacency
+            matrix if False.
+        rand_seed: int
+            Random number generator seed.
+        sig_level: float
+            Significance level.
+        output: str
+            Output filename.
+        num_integration_interval: int
+            Number of integration intervals for the Ito
+            integral, evenly spaced over
+            [0, sampling_times[-1]].
+        max_in_deg: int
+            Maximum in-degree used in BSLR.
+
+    Returns:
+        Saves graph file or return adjacency matrix.
+    """
+    # Create a shallow copy of the default parameters.
+    param_test = get_locke_params()
+    param_test['sigma_co'] = sigma_co*np.ones((3, 4))
+    param_test['sigma_bi'] = sigma_bi*np.ones((3, 4))
+    np.random.seed(rand_seed)
+    # Generate data file.
+    num_time = len(sampling_times)
+    num_genes = 4
+    mrna = np.empty((num_genes, num_cond*num_rep*num_time))
+    tspan = np.linspace(0, sampling_times[-1],
+                        num_integration_interval+1)
+    if one_shot:
+        num_rep_per_traj = num_rep*num_time
+    else:
+        num_rep_per_traj = num_rep
+    for idx_cond in range(num_cond):
+        # Generate the same 12-dimensional initial
+        # conditions for all replicates.
+        exp_init_per_rep = np.random.rand(12)
+        exp_init = np.empty(12*num_rep_per_traj)
+        for idx_rep in range(num_rep_per_traj):
+            exp_init[idx_rep+np.arange(12)*num_rep_per_traj] = (
+                exp_init_per_rep
+                )
+        # Entire solution over the fine tspan as a T-by-12R
+        # matrix, where T = len(tspan) and R = num_rep_per_traj.
+        exp_sol = sdeint.itoint(
+            close(locke_drift, param_test),
+            close(diff_coeff, param_test),
+            exp_init, tspan
+            )
+        # Sampled expression levels at the coarse times,
+        # approximated by the closest time in tspan.
+        exp_sampled = exp_sol[[
+            int(round(x)) for x in
+            np.asarray(sampling_times) / sampling_times[-1]
+            * num_integration_interval
+            ], :]
+        # Reshape the array.
+        for i in range(num_genes):
+            for j in range(num_time):
+                start = idx_cond*num_rep*num_time+j*num_rep
+                if one_shot:
+                    mrna[i, start:start+num_rep] = (
+                        exp_sampled[
+                            j,
+                            i*num_rep_per_traj+j*num_rep:
+                            i*num_rep_per_traj+(j+1)*num_rep
+                            ]
+                        )
+                else:
+                    mrna[i, start:start+num_rep] = (
+                        exp_sampled[j, i*num_rep:(i+1)*num_rep]
+                        )
+    sample_ids = ['c{}_t{}_r{}'.format(k, i, j)
+                  for k in range(num_cond)
+                  for i in range(num_time)
+                  for j in range(num_rep)]
+    mrna_df = pd.DataFrame(data=mrna, columns=sample_ids,
+                           index=['G1', 'G2', 'G3', 'G4'])
+    mrna_df.to_csv('exp-locke.csv')
+    # Generate condition list file.
+    json.dump([list(range(num_cond)), list(range(num_time))],
+              open('cond-locke.json', 'w'), indent=4)
+    # Generate gene list file.
+    np.savetxt('gene-list-locke.csv',
+               [['G1', 'LHY'], ['G2', 'TOC1'],
+                ['G3', 'X'], ['G4', 'Y']],
+               fmt='%s', delimiter=',')
+    # Generate design file.
+    samples_df = pd.DataFrame(data=sample_ids)
+    samples_df['cond'] = samples_df[0].apply(
+        lambda x: x.split('_')[0][1:]
+        )
+    samples_df['time'] = samples_df[0].apply(
+        lambda x: x.split('_')[1][1:]
+        )
+    samples_df.to_csv('design-locke.csv', header=False,
+                      index=False)
+
+    if write_file:
+        if not output:
+            output = (
+                'test-t{num_times}-c{num_cond}-bslr'
+                '-s{sig_level}-r{rand_seed}.xml'.format(
+                    num_times=num_time, sig_level=sig_level,
+                    rand_seed=rand_seed, num_cond=num_cond
+                    )
+                )
+        # Run BSLR.
+        causnet.main(
+            '-c cond-locke.json '
+            '-i gene-list-locke.csv -g {output} '
+            '-x exp-locke.csv '
+            '-P design-locke.csv '
+            '-f {sig_level} '
+            '-m {max_in_deg}'.format(
+                output=output, num_times=num_time,
+                sig_level=sig_level, max_in_deg=max_in_deg
+                ).split()
+            )
+        return
+    else:
+        parser_dict = causnet.load_parser('design-locke.csv')
+        adj_mat_sign_rec = causnet.bslr(
+            parser_dict, mrna_df, num_cond, num_time,
+            num_genes, num_rep, max_in_deg, sig_level
+            )
+        return adj_mat_sign_rec
+
+
+def close(func, *args):
+    """A nested function to convert parameterized function
+    to an unparameterized one."""
+    def newfunc(x, t):
+        return func(x, t, *args)
+    return newfunc
+
+
+def locke_drift(x, t, p):
+    """Drift array of the SDE adapted from Locke et al. MSB 2005
+    for one condition.
+
+    Args:
+        x: array
+            Gene expression levels (mRNA abundances and protein
+            concentrations).  len(x) must be a multiple of 12.
+            x[0]: mRNA abundance of LHY, rep 1.
+            x[1]: mRNA abundance of LHY, rep 2.
+            ...
+            x[r-1]: mRNA abundance of LHY, rep r.
+            x[r]: mRNA abundance of TOC1, rep 1.
+            x[r+1]: mRNA abundance of TOC1, rep 2.
+            ...
+            x[2r-1]: mRNA abundance of TOC1, rep r.
+            x[2r]: mRNA abundance of X, rep 1.
+            ...
+            ...
+            x[4r-1]: mRNA abundance of Y, rep r.
+            x[4r]: cytoplasmic protein concentration of LHY, rep 1.
+            ...
+            ...
+            x[8r-1]: cytoplasmic protein concentration of Y, rep r.
+            x[8r]: nuclear protein concentration of LHY, rep 1.
+            ...
+            ...
+            x[12r-1]: nuclear protein concentration of Y, rep r.
+        t: float
+            Time.
+        p: dict
+            Parameters.
+    """
+    assert((len(x)/3/4).is_integer())
+    num_rep = int(len(x)/3/4)
+    drift = np.empty(len(x))
+    # Replicates.
+    for idx_rep in range(num_rep):
+        # Extract relevant data for the replicate.
+        mrna = x[idx_rep+np.arange(4)*num_rep]
+        cprot = x[4*num_rep+idx_rep+np.arange(4)*num_rep]
+        nprot = x[8*num_rep+idx_rep+np.arange(4)*num_rep]
+        # Three levels of expression (mRNA, cytoplasmic protein,
+        # nuclear protein).
+        for idx_lvl in range(3):
+            # Four genes.
+            for idx_gene in range(4):
+                drift[idx_lvl*4*num_rep
+                      + idx_gene*num_rep
+                      + idx_rep] = locke_drift_lite(
+                          idx_lvl, idx_gene, mrna, cprot,
+                          nprot, p
+                          )
+    return np.asarray(drift)
+
+
+def locke_drift_lite(idx_lvl, idx_gene, mrna, cprot, nprot, p):
+    """Scalar drift of Locke et al. MSB 2005.
+
+    Args:
+        idx_lvl: int
+            Index of expression level.
+                0: mRNA.
+                1: cytoplasmic protein.
+                2: nuclear protein.
+        idx_gene: int
+            Index of gene.
+        mrna: array
+            mRNA abundances.
+        cprot: array
+            Cytoplasmic protein concentrations.
+        nprot: array
+            Nuclear protein concentrations.
+        p: dict
+            Parameters.
+
+    Returns: float
+        Drift including production and degradation.
+    """
+    if idx_lvl == 0:
+        # mRNA.
+        if idx_gene == 0:
+            drift = (
+                hill(nprot[2], p['g1'], p['a'], p['n1'], True)
+                - hill(mrna[0], p['k1'], 1, p['m1'], True)
+                )
+        elif idx_gene == 1:
+            drift = (
+                hill(nprot[3], p['g2'], p['b'], p['n2'], True)
+                *hill(nprot[0], p['g3'], p['c'], 1, False)
+                - hill(mrna[1], p['k4'], 1, p['m4'], True)
+                )
+        elif idx_gene == 2:
+            drift = (
+                hill(nprot[1], p['g4'], p['d'], p['n3'], True)
+                - hill(mrna[2], p['k7'], 1, p['m9'], True)
+                )
+        elif idx_gene == 3:
+            drift = (
+                hill(nprot[1], p['g5'], p['e'], p['n5'], False)
+                *hill(nprot[0], p['g6'], p['f'], 1, False)
+                - hill(mrna[3], p['k10'], 1, p['m12'], True)
+                )
+        else:
+            raise ValueError('Unrecognized gene')
+    elif idx_lvl == 1:
+        # Cytoplasmic protein.
+        if idx_gene == 0:
+            drift = (
+                p['p1']*mrna[0]
+                - p['r1']*cprot[0]
+                + p['r2']*nprot[0]
+                - hill(cprot[0], p['k2'], 1, p['m2'], True)
+                )
+        elif idx_gene == 1:
+            drift = (
+                p['p2']*mrna[1]
+                - p['r3']*cprot[1]
+                + p['r4']*nprot[1]
+                - ((p['m5']+p['m6'])
+                   *hill(cprot[1], p['k5'], 1, 1, True))
+                )
+        elif idx_gene == 2:
+            drift = (
+                p['p3']*mrna[2]
+                - p['r5']*cprot[2]
+                + p['r6']*nprot[2]
+                - hill(cprot[2], p['k8'], 1, p['m10'], True)
+                )
+        elif idx_gene == 3:
+            drift = (
+                p['p4']*mrna[3]
+                - p['r7']*cprot[3]
+                + p['r8']*nprot[3]
+                - hill(cprot[3], p['k11'], 1, p['m13'], True)
+                )
+        else:
+            raise ValueError('Unrecognized gene')
+    elif idx_lvl == 2:
+        # Nuclear protein.
+        if idx_gene == 0:
+            drift = (
+                p['r1']*cprot[0]
+                - p['r2']*nprot[0]
+                - hill(nprot[0], p['k3'], 1, p['m3'], True)
+                )
+        elif idx_gene == 1:
+            drift = (
+                p['r3']*cprot[1]
+                - p['r4']*nprot[1]
+                - hill(nprot[1], p['k6'], 1, p['m7']+p['m8'],
+                       True)
+                )
+        elif idx_gene == 2:
+            drift = (
+                p['r5']*cprot[2]
+                - p['r6']*nprot[2]
+                - hill(nprot[2], p['k9'], 1, p['m11'], True)
+                )
+        elif idx_gene == 3:
+            drift = (
+                p['r7']*cprot[3]
+                - p['r8']*nprot[3]
+                - hill(nprot[3], p['k12'], 1, p['m14'], True)
+                )
+        else:
+            raise ValueError('Unrecognized gene')
+    return drift
+
+
+def hill(x, k, h, beta, activation):
+    """Hill function.
+
+    Args:
+        x: float
+            Concentration.
+        k: float
+            Michaelis-Menten coefficient.
+        h: float
+            Hill coefficient.
+        beta: float
+            Maximum activation.
+        activation: bool
+            True: activation.
+            False: repression.
+
+    Returns: float
+        Activation level.
+        """
+    if activation:
+        act_lvl = x**h/(k**h+x**h)*beta
+    else:
+        act_lvl = k**h/(k**h+x**h)*beta
+    return act_lvl
+
+
+def diff_coeff(x, t, p):
+    """Diffusion coefficient.
+
+    Args:
+        x: array
+            Gene expression levels (mRNA abundances and protein
+                concentrations).
+            The dimension is 12r, where r is the number of
+                replicates.
+            x[0]: mRNA abundance of LHY, rep 1.
+            x[1]: mRNA abundance of LHY, rep 2.
+            ...
+            x[r-1]: mRNA abundance of LHY, rep r.
+            x[r]: mRNA abundance of TOC1, rep 1.
+            x[r+1]: mRNA abundance of TOC1, rep 2.
+            ...
+            x[2r-1]: mRNA abundance of TOC1, rep r.
+            x[2r]: mRNA abundance of X, rep 1.
+            ...
+            ...
+            x[4r-1]: mRNA abundance of Y, rep r.
+            x[4r]: cytoplasmic protein concentration of LHY,
+                rep 1.
+            ...
+            ...
+            x[8r-1]: cytoplasmic protein concentration of Y,
+                rep r.
+            x[8r]: nuclear protein concentration of LHY, rep 1.
+            ...
+            ...
+            x[12r-1]: nuclear protein concentration of Y,
+                rep r.
+        t: float
+            Time.
+        p: dict
+            Parameters.
+
+    Returns: array
+        The N-by-(4*N/3) matrix for the condition, where
+        N = len(x).
+    """
+    assert((len(x)/3/4).is_integer())
+    num_rep = int(len(x)/3/4)
+    diff_mat = np.zeros((len(x), 12*(num_rep+1)))
+    lambda_mat = np.empty((num_rep, num_rep+1))
+    lambda_mat[:, 0] = np.ones(num_rep)
+    lambda_mat[:, 1:] = np.identity(num_rep)
+    for idx_lvl in range(3):
+        for idx_gene in range(4):
+            start_pos = idx_lvl*4*num_rep+idx_gene*num_rep
+            exp_lvl = x[start_pos:start_pos+num_rep]
+            horizontal_start_pos = int(
+                start_pos*(num_rep+1)/num_rep
+                )
+            sigma_mat = np.zeros((num_rep+1, num_rep+1))
+            sigma_mat[0, 0] = p['sigma_co'][idx_lvl,
+                                                idx_gene]
+            sigma_mat[1:, 1:] = (
+                p['sigma_bi'][idx_lvl, idx_gene]
+                * np.identity(num_rep)
+                )
+            diff_mat[
+                start_pos:start_pos+num_rep,
+                horizontal_start_pos:
+                horizontal_start_pos+num_rep+1
+                ] = np.diag(exp_lvl).dot(lambda_mat).dot(
+                    sigma_mat
+                    )
+    return diff_mat
+
+
+def get_locke_params():
+    """Get parameters for the SDE from the supplementary table
+    of Locke et al.
+
+    Args: None
+
+    Returns: dict
+        Parameters.
+    """
+    return {'q1': 2.4514,
+            'n1': 5.1694,
+            'a': 3.3064,
+            'g1': 0.8767,
+            'm1': 1.5283,
+            'k1': 1.8170,
+            'p1': 0.8295,
+            'r1': 16.8363,
+            'r2': 0.1687,
+            'm2': 20.4400,
+            'k2': 1.5644,
+            'm3': 3.6888,
+            'k3': 1.2765,
+            'n2': 3.0087,
+            'b': 1.0258,
+            'g2': 0.0368,
+            'g3': 0.2658,
+            'c': 1.0258,
+            'm4': 3.8231,
+            'k4': 2.5734,
+            'p2': 4.3240,
+            'r3': 0.3166,
+            'r4': 2.1509,
+            'm5': 0.0013,
+            'm6': 3.1741,
+            'k5': 2.7454,
+            'm7': 0.0492,
+            'm8': 4.0424,
+            'k6': 0.4033,
+            'n3': 0.2431,
+            'd': 1.4422,
+            'g4': 0.5388,
+            'm9': 10.1132,
+            'k7': 6.5585,
+            'p3': 2.1470,
+            'r5': 1.0352,
+            'r6': 3.3017,
+            'm10': 0.2179,
+            'k8': 0.6632,
+            'm11': 3.3442,
+            'k9': 17.1111,
+            'q2': 2.4017,
+            'n4': 0.0857,
+            'n5': 0.1649,
+            'g5': 1.1780,
+            'g6': 0.0645,
+            'e': 3.6064,
+            'f': 1.0237,
+            'm12': 4.2970,
+            'k10': 1.7303,
+            'p4': 0.2485,
+            'r7': 2.2123,
+            'r8': 0.2002,
+            'm13': 0.1347,
+            'k11': 1.8258,
+            'm14': 0.6114,
+            'k12': 1.8066,
+            'p5': 0.5000,
+            'k13': 1.2000,
+            'm15': 1.2000,
+            'q3': 1.0000,
+            # Multipliers of condition-dependent and biological
+            # components of nominal production variations.
+            'sigma_co': 0.1*np.ones((3, 4)),
+            'sigma_bi': 0.1*np.ones((3, 4))}
+
+
+def eval_bslr_multi_sims(num_sims, one_shot):
+    """Evaluate BSLR with multiple simulations.
+
+    Args:
+        num_sims: int
+            Number of simulations.
+        one_shot: bool
+            True for one-shot sampling.  False for multi-shot.
+
+    Returns: None
+        Prints number of defined FDR, and average FDR, FNR, FPR.
+    """
+    # Each row is for the same regulator.  See, e.g., line 325
+    # of bio_data_gen.py (CausNet commit 0f67f57) for details.
+    adj_mat_true = np.asarray([
+        [0, -1, 0, -1], [0, 0, 1, -1],
+        [1, 0, 0, 0], [0, 1, 0, 0]
+        ]).astype(float)
+    fdr = []
+    fnr = []
+    fpr = []
+    for i in tqdm(range(num_sims)):
+        # Use None as rand_seed to have different result for
+        # each simulation.
+        adj_mat_rec = eval_bslr_on_locke(
+            list(range(0, 12, 2)), 1, 3, one_shot, 0.03, 0.04,
+            False, rand_seed=None,
+            num_integration_interval=1000, max_in_deg=2
+            )
+        r, p, s = get_sas(adj_mat_rec, adj_mat_true)
+        if not np.isnan(p):
+            fdr.append(1-p)
+        fnr.append(1-r)
+        fpr.append(1-s)
+    print(len(fdr))
+    print(np.mean(fdr), np.mean(fnr), np.mean(fpr))
     return
