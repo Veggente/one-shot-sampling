@@ -1125,7 +1125,7 @@ def get_locke_params():
             'sigma_bi': 0.1*np.ones((3, 4))}
 
 
-def eval_bslr_multi_sims(num_sims, one_shot):
+def eval_bslr_multi_sims(num_sims, one_shot, sigma_co, sigma_bi):
     """Evaluate BSLR with multiple simulations.
 
     Args:
@@ -1133,6 +1133,10 @@ def eval_bslr_multi_sims(num_sims, one_shot):
             Number of simulations.
         one_shot: bool
             True for one-shot sampling.  False for multi-shot.
+        sigma_co: float
+            Condition-dependent variation level.
+        sigma_bi: float
+            Biologically variation level.
 
     Returns: None
         Prints number of defined FDR, and average FDR, FNR, FPR.
@@ -1150,8 +1154,8 @@ def eval_bslr_multi_sims(num_sims, one_shot):
         # Use None as rand_seed to have different result for
         # each simulation.
         adj_mat_rec = eval_bslr_on_locke(
-            list(range(0, 12, 2)), 1, 3, one_shot, 0.03, 0.04,
-            False, rand_seed=None,
+            list(range(0, 12, 2)), 1, 3, one_shot, sigma_co,
+            sigma_bi, False, rand_seed=None,
             num_integration_interval=1000, max_in_deg=2
             )
         r, p, s = get_sas(adj_mat_rec, adj_mat_true)
