@@ -621,7 +621,8 @@ def plot_plos_one_fig_5_6(
 def eval_bslr_on_locke(
         sampling_times, num_cond, num_rep, one_shot, sigma_co,
         sigma_bi, write_file, rand_seed=0, sig_level=0.05,
-        output='', num_integration_interval=100, max_in_deg=3
+        output='', num_integration_interval=100, max_in_deg=3,
+        rep_avg=True
         ):
     """Evaluate BSLR using network in Locke et al. MSB 2005.
 
@@ -659,6 +660,9 @@ def eval_bslr_on_locke(
             [0, sampling_times[-1]].
         max_in_deg: int
             Maximum in-degree used in BSLR.
+        rep_avg: bool
+            Do replicate averaging if True.  Otherwise take
+            replicates as different conditions.
 
     Returns:
         Saves graph file or return adjacency matrix.
@@ -724,19 +728,33 @@ def eval_bslr_on_locke(
     mrna_df = pd.DataFrame(data=mrna, columns=sample_ids,
                            index=['G1', 'G2', 'G3', 'G4'])
     mrna_df.to_csv('exp-locke.csv')
-    # Generate condition list file.
-    json.dump([list(range(num_cond)), list(range(num_time))],
-              open('cond-locke.json', 'w'), indent=4)
     # Generate gene list file.
     np.savetxt('gene-list-locke.csv',
                [['G1', 'LHY'], ['G2', 'TOC1'],
                 ['G3', 'X'], ['G4', 'Y']],
                fmt='%s', delimiter=',')
+    # Generate condition list file.
+    num_rep_alg = num_rep
+    num_cond_alg = num_cond
+    if rep_avg:
+        conditions = list(range(num_cond))
+    else:
+        num_rep_alg = 1
+        num_cond_alg = num_cond*num_rep
+        conditions = list(range(num_cond_alg))
+    json.dump([conditions, list(range(num_time))],
+              open('cond-locke.json', 'w'), indent=4)
     # Generate design file.
     samples_df = pd.DataFrame(data=sample_ids)
-    samples_df['cond'] = samples_df[0].apply(
-        lambda x: x.split('_')[0][1:]
-        )
+    if rep_avg:
+        samples_df['cond'] = samples_df[0].apply(
+            lambda x: x.split('_')[0][1:]
+            )
+    else:
+        samples_df['cond'] = samples_df[0].apply(
+            lambda x: int(x.split('_')[0][1:])*num_rep
+            + int(x.split('_')[2][1:])
+            )
     samples_df['time'] = samples_df[0].apply(
         lambda x: x.split('_')[1][1:]
         )
@@ -749,7 +767,7 @@ def eval_bslr_on_locke(
                 'test-t{num_times}-c{num_cond}-bslr'
                 '-s{sig_level}-r{rand_seed}.xml'.format(
                     num_times=num_time, sig_level=sig_level,
-                    rand_seed=rand_seed, num_cond=num_cond
+                    rand_seed=rand_seed, num_cond=num_cond_alg
                     )
                 )
         # Run BSLR.
@@ -768,8 +786,8 @@ def eval_bslr_on_locke(
     else:
         parser_dict = causnet.load_parser('design-locke.csv')
         adj_mat_sign_rec = causnet.bslr(
-            parser_dict, mrna_df, num_cond, num_time,
-            num_genes, num_rep, max_in_deg, sig_level
+            parser_dict, mrna_df, num_cond_alg, num_time,
+            num_genes, num_rep_alg, max_in_deg, sig_level
             )
         return adj_mat_sign_rec
 
@@ -1126,7 +1144,7 @@ def get_locke_params():
 
 
 def eval_bslr_multi_sims(num_sims, one_shot, sigma_co,
-                         sigma_bi, num_reps=3):
+                         sigma_bi, num_reps=3, rep_avg=True):
     """Evaluate BSLR with multiple simulations.
 
     Args:
@@ -1140,6 +1158,9 @@ def eval_bslr_multi_sims(num_sims, one_shot, sigma_co,
             Biologically variation level.
         num_reps: int
             Number of replicates.
+        rep_avg: bool
+            Do replicate averaging if True.  Otherwise take
+            replicates as different conditions.
 
     Returns: None
         Prints number of defined FDR, and average FDR, FNR, FPR.
@@ -1159,7 +1180,8 @@ def eval_bslr_multi_sims(num_sims, one_shot, sigma_co,
         adj_mat_rec = eval_bslr_on_locke(
             list(range(0, 12, 2)), 1, num_reps, one_shot,
             sigma_co, sigma_bi, False, rand_seed=None,
-            num_integration_interval=1000, max_in_deg=2
+            num_integration_interval=1000, max_in_deg=2,
+            rep_avg=rep_avg
             )
         r, p, s = get_sas(adj_mat_rec, adj_mat_true)
         if not np.isnan(p):
