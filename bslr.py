@@ -1144,7 +1144,8 @@ def get_locke_params():
 
 
 def eval_bslr_multi_sims(num_sims, one_shot, sigma_co,
-                         sigma_bi, num_reps=3, rep_avg=True):
+                         sigma_bi, num_reps=3, rep_avg=True,
+                         sig_level=0.05):
     """Evaluate BSLR with multiple simulations.
 
     Args:
@@ -1161,6 +1162,8 @@ def eval_bslr_multi_sims(num_sims, one_shot, sigma_co,
         rep_avg: bool
             Do replicate averaging if True.  Otherwise take
             replicates as different conditions.
+        sig_level: float
+            Significance level.
 
     Returns: None
         Prints number of defined FDR, and average FDR, FNR, FPR.
@@ -1181,7 +1184,7 @@ def eval_bslr_multi_sims(num_sims, one_shot, sigma_co,
             list(range(0, 12, 2)), 1, num_reps, one_shot,
             sigma_co, sigma_bi, False, rand_seed=None,
             num_integration_interval=1000, max_in_deg=2,
-            rep_avg=rep_avg
+            rep_avg=rep_avg, sig_level=sig_level
             )
         r, p, s = get_sas(adj_mat_rec, adj_mat_true)
         if not np.isnan(p):
