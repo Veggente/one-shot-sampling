@@ -622,7 +622,7 @@ def eval_bslr_on_locke(
         sampling_times, num_cond, num_rep, one_shot, sigma_co,
         sigma_bi, write_file, rand_seed=0, sig_level=0.05,
         output='', num_integration_interval=100, max_in_deg=3,
-        rep_avg=True
+        rep_avg=True, diffusion_type='linear'
         ):
     """Evaluate BSLR using network in Locke et al. MSB 2005.
 
@@ -663,6 +663,9 @@ def eval_bslr_on_locke(
         rep_avg: bool
             Do replicate averaging if True.  Otherwise take
             replicates as different conditions.
+        diffusion_type: str
+            Diffusion type.  Can be 'linear' or
+            'michaelis-menten'.
 
     Returns:
         Saves graph file or return adjacency matrix.
@@ -671,6 +674,7 @@ def eval_bslr_on_locke(
     param_test = get_locke_params()
     param_test['sigma_co'] = sigma_co*np.ones((3, 4))
     param_test['sigma_bi'] = sigma_bi*np.ones((3, 4))
+    param_test['diffusion_type'] = diffusion_type
     np.random.seed(rand_seed)
     # Generate data file.
     num_time = len(sampling_times)
@@ -1046,7 +1050,15 @@ def diff_coeff(x, t, p):
     for idx_lvl in range(3):
         for idx_gene in range(4):
             start_pos = idx_lvl*4*num_rep+idx_gene*num_rep
-            exp_lvl = x[start_pos:start_pos+num_rep]
+            if p['diffusion_type'] == 'linear':
+                gene_effect = x[start_pos:start_pos+num_rep]
+            elif p['diffusion_type'] == 'michaelis-menten':
+                gene_effect = [
+                    hill(y, 1, 1, 1, True) for y in
+                    x[start_pos:start_pos+num_rep]
+                    ]
+            else:
+                raise ValueError('Unrecognized diffusion type')
             horizontal_start_pos = int(
                 start_pos*(num_rep+1)/num_rep
                 )
@@ -1061,7 +1073,7 @@ def diff_coeff(x, t, p):
                 start_pos:start_pos+num_rep,
                 horizontal_start_pos:
                 horizontal_start_pos+num_rep+1
-                ] = np.diag(exp_lvl).dot(lambda_mat).dot(
+                ] = np.diag(gene_effect).dot(lambda_mat).dot(
                     sigma_mat
                     )
     return diff_mat
@@ -1140,12 +1152,14 @@ def get_locke_params():
             # Multipliers of condition-dependent and biological
             # components of nominal production variations.
             'sigma_co': 0.1*np.ones((3, 4)),
-            'sigma_bi': 0.1*np.ones((3, 4))}
+            'sigma_bi': 0.1*np.ones((3, 4)),
+            'diffusion_type': 'linear'}
 
 
 def eval_bslr_multi_sims(num_sims, one_shot, sigma_co,
                          sigma_bi, num_reps=3, rep_avg=True,
-                         sig_level=0.05):
+                         sig_level=0.05,
+                         diffusion_type='linear'):
     """Evaluate BSLR with multiple simulations.
 
     Args:
@@ -1164,6 +1178,9 @@ def eval_bslr_multi_sims(num_sims, one_shot, sigma_co,
             replicates as different conditions.
         sig_level: float
             Significance level.
+        diffusion_type: str
+            Diffusion type.  Can be 'linear' or
+            'michaelis-menten'.
 
     Returns: None
         Prints number of defined FDR, and average FDR, FNR, FPR.
@@ -1184,7 +1201,8 @@ def eval_bslr_multi_sims(num_sims, one_shot, sigma_co,
             list(range(0, 12, 2)), 1, num_reps, one_shot,
             sigma_co, sigma_bi, False, rand_seed=None,
             num_integration_interval=1000, max_in_deg=2,
-            rep_avg=rep_avg, sig_level=sig_level
+            rep_avg=rep_avg, sig_level=sig_level,
+            diffusion_type=diffusion_type
             )
         r, p, s = get_sas(adj_mat_rec, adj_mat_true)
         if not np.isnan(p):
