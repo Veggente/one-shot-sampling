@@ -20,6 +20,7 @@ Functions:
     diff_coeff: Diffusion coefficient.
     get_locke_params: Get parameters in Locke paper.
     eval_bslr_multi_sims: Evaluate BSLR with multiple simulations.
+    gen_plos_one_table_2: Generate data in PLOS ONE Table 2.
 """
 from tqdm import tqdm
 import numpy as np
@@ -1211,4 +1212,24 @@ def eval_bslr_multi_sims(num_sims, one_shot, sigma_co,
         fpr.append(1-s)
     print(len(fdr))
     print(np.mean(fdr), np.mean(fnr), np.mean(fpr))
+    return
+
+
+def gen_plos_one_table_2(num_sims=1000):
+    """Generate PLOS ONE submission Table 4.
+
+    Args:
+        num_sims: int
+            Number of simulations.
+
+    Returns: None
+        Prints number of defined FDR (out of 1000 simulations)
+        and the average FDR, FNR and FPR for each setting.
+    """
+    for one_shot in [True, False]:
+        for rep_avg in [True, False]:
+            eval_bslr_multi_sims(
+                num_sims, one_shot, 0.3, 0.4, rep_avg=rep_avg,
+                sig_level=0.5
+                )
     return
